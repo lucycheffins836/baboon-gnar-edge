@@ -1,0 +1,6 @@
+structure,ER,ER,RDP,RDP,SBM,SBM
+density,0.1,0.4,0.1,0.4,0.1,0.4
+fitted_model,,,,,,
+correctly_specified,3.183,2.863,3.828,2.836,3.658,2.814
+covariates_no_interaction,3.956,2.85,4.397,2.782,4.428,2.9
+no_covariates_fitted,4.282,3.311,4.577,3.234,5.692,3.126

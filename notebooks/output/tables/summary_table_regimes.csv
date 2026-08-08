@@ -1,0 +1,19 @@
+regime,density,structure,arima,gnar_no_neighbours,gnar_with_neighbours
+no_covariates (regime 4),0.1,ER,2.012,1.234,1.093
+no_covariates (regime 4),0.1,RDP,299.47,1.817,1.086
+no_covariates (regime 4),0.1,SBM,5.43,1.23,1.034
+no_covariates (regime 4),0.4,ER,1.222,1.039,1.009
+no_covariates (regime 4),0.4,RDP,1.226,1.002,0.979
+no_covariates (regime 4),0.4,SBM,1.214,1.047,1.023
+with_covariates_interaction (regime 9),0.1,ER,4.252,2.016,1.319
+with_covariates_interaction (regime 9),0.1,RDP,51.942,3.478,1.552
+with_covariates_interaction (regime 9),0.1,SBM,43.032,2.182,1.41
+with_covariates_interaction (regime 9),0.4,ER,1.671,1.44,1.314
+with_covariates_interaction (regime 9),0.4,RDP,1.691,1.413,1.271
+with_covariates_interaction (regime 9),0.4,SBM,1.761,1.396,1.27
+with_covariates_no_interaction (regime 8),0.1,ER,17.655,1.617,1.108
+with_covariates_no_interaction (regime 8),0.1,RDP,22.034,2.215,1.242
+with_covariates_no_interaction (regime 8),0.1,SBM,15.451,1.771,1.113
+with_covariates_no_interaction (regime 8),0.4,ER,1.37,1.217,1.055
+with_covariates_no_interaction (regime 8),0.4,RDP,1.391,1.193,1.069
+with_covariates_no_interaction (regime 8),0.4,SBM,1.349,1.23,1.092

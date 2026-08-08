@@ -1,0 +1,14 @@
+parameter,RMSE_with_interaction,RMSE_no_interaction
+Alpha 1,0.0092,0.0119
+Alpha 2,0.0074,0.0224
+Alpha 3,0.0071,0.0156
+"beta1,1",0.0294,0.0333
+"beta1,2",0.092,0.1641
+"beta2,1",0.0263,0.0525
+"beta2,2",0.0266,0.0775
+"beta3,1",0.025,0.0451
+"beta3,2",0.022,0.0381
+age_diff,0.0019,0.0155
+mean_age,0.1491,0.0347
+sim_temp,0.1127,0.1169
+Mean Age x Temp,0.0049,

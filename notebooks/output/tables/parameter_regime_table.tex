@@ -1,0 +1,19 @@
+\begin{table}
+\caption{Simulation regimes for moderately sized networks.}
+\label{tab:simulation_regimes}
+\begin{tabular}{clp{2.8cm}p{4.2cm}p{4.2cm}p{2.6cm}p{4.2cm}}
+\toprule
+Regime & Model & Alpha & Beta & Gamma (edge) & Gamma (time) & Gamma (interaction) \\
+\midrule
+1 & GNAR-edge(1, [1]) & $(0.2)$ & $(0.3)$ & $-$ & $-$ & $-$ \\
+2 & GNAR-edge(1, [2]) & $(0.2)$ & lag 1: (0.3, 0.4) & $-$ & $-$ & $-$ \\
+3 & GNAR-edge(3, [1, 1, 1]) & $(0.2, 0.4, -0.6)$ & $(0.2, 0.1, -0.2)$ & $-$ & $-$ & $-$ \\
+4 & GNAR-edge(3, [2, 2, 2]) & $(0.2, 0.4, -0.6)$ & lag 1: (0.3, 0.1); lag 2: (0.1, 0.1); lag 3: (-0.2, 0.3) & $-$ & $-$ & $-$ \\
+5 & GNAR-edge(3, [2, 0, 0]) & $(0.2, 0.4, -0.6)$ & lag 1: (0.3, 0.4) & $-$ & $-$ & $-$ \\
+6 & GNAR-edge(3, [2, 2, 2]) & $(0.2, 0.4, -0.6)$ & lag 1: (0.3, 0.1); lag 2: (0.1, 0.1); lag 3: (-0.2, 0.3) & Age difference (0.05); Mean age (0.03) & $-$ & $-$ \\
+7 & GNAR-edge(3, [2, 2, 2]) & $(0.2, 0.4, -0.6)$ & lag 1: (0.3, 0.1); lag 2: (0.1, 0.1); lag 3: (-0.2, 0.3) & $-$ & Temperature (0.2) & $-$ \\
+8 & GNAR-edge(3, [2, 2, 2]) & $(0.2, 0.4, -0.6)$ & lag 1: (0.3, 0.1); lag 2: (0.1, 0.1); lag 3: (-0.2, 0.3) & Age difference (0.05); Mean age (0.03) & Temperature (0.2) & $-$ \\
+9 & GNAR-edge(3, [2, 2, 2]) & $(0.2, 0.4, -0.6)$ & lag 1: (0.3, 0.1); lag 2: (0.1, 0.1); lag 3: (-0.2, 0.3) & Age difference (0.05); Mean age (0.03) & Temperature (0.2) & Mean age $\times$ Temperature (lag 1) (0.02) \\
+\bottomrule
+\end{tabular}
+\end{table}
