@@ -86,6 +86,10 @@ python -m ipykernel install --user --name=baboon-gnar-edge --display-name "Pytho
 
 The raw interaction data (`baboons_proximity_data.txt`) was originally collected by Gelardi et al. (2020). It can be accessed at https://sociopatterns.org/datasets/baboons-interactions. The daily maximum temperature data (`trets.csv`) originates from Météo-France's Open Data Climatology API: https://portail-api.meteofrance.fr/web/en/api/DonneesPubliquesClimatologie. Baboon age and sex data was obtained via direct communications with CNRS Primate Center.
 
+## Note on notation
+
+In the dissertation text, a different parameter name is used for each type of exogenous coefficient: $\mu_{p}$ refers to edge-level covariates, $\delta_{q}$ refers to the time-varying exogenous series, and $\eta_{p,q}$ refers to their interaction. In the codebase, these exogenous coefficients are all referred to using a single parameter name, `gamma`, and are stored in a joint `gamma_` dictionary in the fitted learner objects. Each type of exogenous coefficient is distinguised by key name (e.g.`gamma_["age_diff"]`, `gamma_["sim_temp"]`, `gamma_["age_diff_X_sim_temp"]`) rather than separate variable names.
+
 ## Acknowledgements
 
 The original GNAR-edge implementation by Mantziou et al. (2023) was developed for R, and can be found here: https://github.com/mantziou/GNAR-edge-model. A python implementation of the GNAR-edge model was developed by Tian Xie, and can be found here: https://github.com/naive4E4A55/gnar-edge. The code for my project relies heavily on Tian Xie's python implementation. 
