@@ -14,7 +14,7 @@ from BaseEdgeGNAR_edge_global import GNAREdgeGlobalLearner
 from edge_baselines import ARIMAEdgeBaseline, NaiveEdgeBaseline, ZeroEdgeBaseline, compare_baselines,  DFMEdgeBaseline, dfm_pca_one_step
 from edge_graph import ArrayEdgeGraph
 from RollingEdgePredict import RollingEdgePredict
-from .model import build_edge_covariate, GNAREdgeGlobalMultiCovLearner
+from model import build_edge_covariate, GNAREdgeGlobalMultiCovLearner
 
 
 

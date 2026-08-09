@@ -21,8 +21,8 @@ from BaseEdgeGNAR_edge_global import GNAREdgeGlobalLearner
 from edge_baselines import ARIMAEdgeBaseline, NaiveEdgeBaseline, ZeroEdgeBaseline, compare_baselines
 from edge_graph import ArrayEdgeGraph
 from RollingEdgePredict import RollingEdgePredict
-from .model import build_edge_covariate, GNAREdgeGlobalMultiCovLearner
-from .simulation import (
+from model import build_edge_covariate, GNAREdgeGlobalMultiCovLearner
+from simulation import (
     # Network generation
     calibrate_rdp_radius,
     get_or_calibrate_rdp_radius,
