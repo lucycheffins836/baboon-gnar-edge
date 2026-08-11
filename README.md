@@ -90,6 +90,14 @@ The raw interaction data (`baboons_proximity_data.txt`) was originally collected
 
 In the dissertation text, a different parameter name is used for each type of exogenous coefficient: $\mu_{p}$ refers to edge-level covariates, $\delta_{q}$ refers to the time-varying exogenous series, and $\eta_{p,q}$ refers to their interaction. In the codebase, these exogenous coefficients are all referred to using a single parameter name, `gamma`, and are stored in a joint `gamma_` dictionary in the fitted learner objects. Each type of exogenous coefficient is distinguised by key name (e.g.`gamma_["age_diff"]`, `gamma_["sim_temp"]`, `gamma_["age_diff_X_sim_temp"]`) rather than separate variable names.
 
+## Testing Notebooks Quickly
+
+When run at a full scale, some of the notebooks take several hours to run. This is especially notable for `03_simulation_prediction.ipynb` and
+`04_model_misspecification.ipynb`. To verify that the pipeline runs succesfully without waiting for a full scale completion, at the top of these two notebooks is a `QUICK_TEST` flag. Setting `QUICK_TEST = True` reduces the number of structures considered and the number of replications performed.
+
+Before reproducing results from the dissertation, ensure that `QUICK_TEST = False` in every notebook before running the experiments. This is the default setting, and is what was used to produce results for the dissertation itself.
+
+
 ## Acknowledgements
 
 The original GNAR-edge implementation by Mantziou et al. (2023) was developed for R, and can be found here: https://github.com/mantziou/GNAR-edge-model. A python implementation of the GNAR-edge model was developed by Tian Xie, and can be found here: https://github.com/naive4E4A55/gnar-edge. The code for my project relies heavily on Tian Xie's python implementation. 
