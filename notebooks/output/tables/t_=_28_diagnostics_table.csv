@@ -1,2 +1,0 @@
-label,mean_residual,sd_residual,shapiro_stat,shapiro_p,n_periods,n_edges,n_observations
-T = 28,-0.0015312875806713301,1.0072678143882468,0.9983278162192475,0.6970784046119061,22,34,748

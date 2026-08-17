@@ -1,2 +1,0 @@
-label,mean_residual,sd_residual,shapiro_stat,shapiro_p,n_periods,n_edges,n_observations
-"Full model, l = 6, r = 2",-4.1042102877836923e-05,0.019498794748836683,0.8989787950671576,4.493077478201104e-19,17,34,578

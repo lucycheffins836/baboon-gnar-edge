@@ -1,3 +1,0 @@
-model,n_edges,MAE,RMSE
-Canonical (single-direction),34,18.80453563218402,25.58010580804856
-Bidirectional,68,21.08867577707674,27.96565075267758

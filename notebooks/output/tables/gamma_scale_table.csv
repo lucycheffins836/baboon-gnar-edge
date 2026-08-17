@@ -1,4 +1,0 @@
-Scale,Edge covariates,Time covariate,Interaction
-Small,"Age diff = 0.05, Mean age = 0.03",0.2,Mean Age × Temp = 0.02
-Moderate,"Age diff = 0.15, Mean age = 0.10",0.5,Mean age × Temp = 0.08
-Large,"Age diff = 0.30, Mean age = 0.25",1.0,Mean age × Temp = 0.20

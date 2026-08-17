@@ -1,6 +1,0 @@
-model,RMSE
-"Extended GNAR-edge, with covariates (L=6, r=2)",25.58010580804856
-"Baseline GNAR-edge, no covariates (L=6, r=0)",25.7157162304876
-"arima(1,0,0)",29.922262135288534
-arima(auto),31.790251908041586
-naive,38.53478184400044
