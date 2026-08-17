@@ -417,105 +417,325 @@ def build_design_matrix(learner, train_set):
 def simulate_full_model(edge_list, K, L, stages_per_lag,
                         true_alpha, true_beta_dict, edge_covariates, true_gamma_edge_cov,
                         true_gamma_time_cov, interaction_pairs, true_gamma_interaction,
-                        T, noise_std = 1.0, seed = None):
-
+                        T, noise_std=1.0, time_cov_name="sim_temp", seed=None):
     """
-    Simulate a full multivariate GNAR-edge process with covariate effects.
+        Simulate a full multivariate GNAR-edge process with covariate effects.
+    
+        The function generates an edge-weight panel according to a user-specified
+        data-generating process with autoregressive terms, neighbour-stage effects,
+        edge-level covariate effects, a time-varying exogenous covariate, and optional
+        interaction effects between edge and time covariates. It also constructs the
+        corresponding ``ArrayEdgeGraph`` used by the model-fitting code.
+    
+        Parameters
+        ----------
+        edge_list : list of tuple
+            Undirected edge list encoded as node-index pairs ``(u, v)``.
+        K : int
+            Number of nodes in the network.
+        L : int
+            Number of autoregressive lags.
+        stages_per_lag : list of list of int
+            Neighbour stages included at each lag. The ``l``-th entry corresponds to
+            lag ``l + 1``.
+        true_alpha : array-like
+            True autoregressive coefficients, one per lag.
+        true_beta_dict : dict
+            Mapping ``(lag, stage)`` to the true neighbour-effect coefficient.
+        edge_covariates : dict
+            Dictionary of edge-level covariate arrays keyed by covariate name.
+        true_gamma_edge_cov : dict
+            Mapping from edge-covariate name to its true coefficient.
+        true_gamma_time_cov : float
+            True coefficient on the time-varying exogenous covariate.
+        interaction_pairs : list of tuple
+            Pairs ``(edge_name, time_name)`` identifying interaction terms.
+        true_gamma_interaction : dict
+            Mapping from interaction pair to its true coefficient.
+        T : int
+            Total length of the simulated time series.
+        noise_std : float, default=1.0
+            Standard deviation of the Gaussian noise added at each time step.
+        seed : int, optional
+            Random seed used for reproducibility.
+    
+        Returns
+        -------
+        tuple
+            A triple ``(X, time_cov, graph)`` where ``X`` is the simulated edge panel
+            of shape ``(T, E)``, ``time_cov`` is the simulated exogenous series, and
+            ``graph`` is the ``ArrayEdgeGraph`` containing the network structure.
+        """
+    rng = np.random.default_rng(seed)
+    E = len(edge_list)
 
-    The function generates an edge-weight panel according to a user-specified
-    data-generating process with autoregressive terms, neighbour-stage effects,
-    edge-level covariate effects, a time-varying exogenous covariate, and optional
-    interaction effects between edge and time covariates. It also constructs the
-    corresponding ``ArrayEdgeGraph`` used by the model-fitting code.
+    needed_r = sorted({r for rs in stages_per_lag for r in rs})
+    W_dict, graph = build_W_matrices(edge_list, K, needed_r)
+
+    time_cov = simulate_ar1_exog(T, phi=0.7, mean=30, sd=3, seed=seed)
+
+    X = np.zeros((T, E))
+    X[:L, :] = rng.normal(0, noise_std, size=(L, E))
+
+    for t in range(L, T):
+        pred = np.zeros(E)
+        for l in range(1, L + 1):
+            pred += true_alpha[l-1] * X[t-l, :]
+            for r in stages_per_lag[l-1]:
+                pred += true_beta_dict[(l, r)] * (W_dict[r] @ X[t-l, :])
+
+        for name, gamma_val in true_gamma_edge_cov.items():
+            pred += gamma_val * edge_covariates[name]
+
+        pred += true_gamma_time_cov * time_cov[t]
+
+        for (edge_name, cov_name) in interaction_pairs:
+            gamma_val = true_gamma_interaction[(edge_name, cov_name)]
+            pred += gamma_val * edge_covariates[edge_name] * time_cov[t]
+
+        X[t, :] = pred + rng.normal(0, noise_std, size=E)
+
+    return X, time_cov, graph
+
+def run_fixed_network_replication(
+    edge_list, K, L, stages_per_lag,
+    true_alpha, true_beta_dict, true_gamma_edge_cov,
+    true_gamma_time_cov, interaction_pairs, true_gamma_interaction,
+    T, seed, ages=None, sexes=None
+):
+    """
+    Run one simulation replication on a fixed, pre-specified network topology.
+
+    This function simulates an extended GNAR-edge process on a fixed network,
+    fits the extended GNAR-edge model to the simulated data, and constructs a
+    per-parameter results table containing point estimates, 95% confidence
+    intervals, and indicators of whether the confidence intervals cover the
+    supplied true parameter values.
 
     Parameters
     ----------
     edge_list : list of tuple
-        Undirected edge list encoded as node-index pairs ``(u, v)``.
+        Fixed edge list defining the network topology.
     K : int
-        Number of nodes in the network.
+        Number of nodes.
     L : int
         Number of autoregressive lags.
     stages_per_lag : list of list of int
-        Neighbour stages included at each lag. The ``l``-th entry corresponds to
-        lag ``l + 1``.
+        Neighbour stages included at each lag.
     true_alpha : array-like
-        True autoregressive coefficients, one per lag.
+        True autoregressive coefficients used in the data-generating process.
     true_beta_dict : dict
-        Mapping ``(lag, stage)`` to the true neighbour-effect coefficient.
-    edge_covariates : dict
-        Dictionary of edge-level covariate arrays keyed by covariate name.
+        Dictionary mapping ``(lag, stage)`` pairs to true neighbour-effect
+        coefficients.
     true_gamma_edge_cov : dict
-        Mapping from edge-covariate name to its true coefficient.
+        Dictionary mapping edge-covariate names to their true coefficients.
     true_gamma_time_cov : float
-        True coefficient on the time-varying exogenous covariate.
+        True coefficient for the time-varying exogenous covariate.
     interaction_pairs : list of tuple
-        Pairs ``(edge_name, time_name)`` identifying interaction terms.
+        Interaction terms included in the fitted model.
     true_gamma_interaction : dict
-        Mapping from interaction pair to its true coefficient.
+        Dictionary mapping interaction terms to their true coefficients.
     T : int
-        Total length of the simulated time series.
-    noise_std : float, default=1.0
-        Standard deviation of the Gaussian noise added at each time step.
-    seed : int, optional
+        Number of time points.
+    seed : int
         Random seed used for reproducibility.
+    ages : array-like, optional
+        Node-level ages used to construct edge covariates. If ``None``,
+        synthetic ages are simulated.
+    sexes : array-like, optional
+        Node-level sexes used to construct edge covariates. If ``None``,
+        synthetic sexes are simulated.
 
     Returns
     -------
     tuple
-        A triple ``(X, time_cov, graph)`` where ``X`` is the simulated edge panel
-        of shape ``(T, E)``, ``time_cov`` is the simulated exogenous series, and
-        ``graph`` is the ``ArrayEdgeGraph`` containing the network structure.
+        A tuple containing:
 
-    Notes
-    -----
-    The interaction term implementation assumes that interaction pairs are specified
-    with the time covariate name ``"sim_temp"`` when looking up the corresponding
-    coefficient in ``true_gamma_interaction``.
+        - ``result_table`` : pandas.DataFrame
+            Per-parameter true values, estimates, 95% confidence intervals,
+            and coverage indicators.
+        - ``learner`` : GNAREdgeGlobalMultiCovLearner
+            Fitted extended GNAR-edge model.
+        - ``graph`` : ArrayEdgeGraph
+            Simulated network graph.
     """
 
-    #random number generator
-    rng = np.random.default_rng(seed)
-    #E = number of edges
-    E = len(edge_list)
+    time_cov_name = (
+    interaction_pairs[0][1]
+    if len(interaction_pairs) > 0
+    else "sim_temp"
+    )
 
-    #building neighbour matrices
-    needed_r = sorted({r for rs in stages_per_lag for r in rs})
-    W_dict, graph = build_W_matrices(edge_list, K, needed_r)
+    # Simulating node-level covariates if they were not supplied
+    if ages is None or sexes is None:
+        ages, sexes = simulate_node_covariates(K=K, seed=seed)
 
-    #simulate the time-varying exogenous covariate as its own AR(1) process
-    time_cov = simulate_ar1_exog(T, phi = 0.7, mean = 30, sd = 3, seed = seed)
+    # Building edge covariates
+    edge_covariates_full = build_synthetic_edge_covariates(
+        edge_list, ages, sexes
+    )
+    edge_covariates_sim = {
+        name: edge_covariates_full[name]
+        for name in true_gamma_edge_cov.keys()
+    }
 
-    #building an edge panel
-    X = np.zeros((T,E))
-    #burn in initial values
-    X[:L, :] = rng.normal(0, noise_std, size = (L,E))
+    # Simulating the model on the fixed network
+    X_sim, time_cov_sim, graph = simulate_full_model(
+        edge_list,
+        K,
+        L,
+        stages_per_lag,
+        true_alpha,
+        true_beta_dict,
+        edge_covariates_sim,
+        true_gamma_edge_cov,
+        true_gamma_time_cov,
+        interaction_pairs,
+        true_gamma_interaction,
+        T=T,
+        time_cov_name=time_cov_name,
+        seed=seed,
+    )
 
-    for t in range(L,T):
-        pred = np.zeros(E)
-        for l in range(1, L + 1):
-            #autoregressive effects
-            pred += true_alpha[l-1] * X[t-l, :]
-            #neighbour effects
-            for r in stages_per_lag[l-1]:
-                pred += true_beta_dict[(l, r)] * (W_dict[r] @ X[t-l, :])
+    # Setting time index
+    time_index = pd.date_range(
+        "2020-01-01",
+        periods=T,
+        freq="D"
+    )
 
-        #per-edge covariate effects
-        for name, gamma_val in true_gamma_edge_cov.items():
-            pred += gamma_val * edge_covariates[name]
+    exog_series_sim = {}
 
-        #time varying covariate effects
-        pred += true_gamma_time_cov * time_cov[t]
+    if true_gamma_time_cov != 0.0 or len(interaction_pairs) > 0:
+        exog_series_sim = {
+            time_cov_name: pd.Series(time_cov_sim, index=time_index)
+        }
 
-        #interactions effects
-        for (edge_name, _) in interaction_pairs:
-            gamma_val = true_gamma_interaction[(edge_name, "sim_temp")]
-            pred += gamma_val * edge_covariates[edge_name] * time_cov[t]
-        
-        #adding gaussian noise
-        X[t, :] = pred + rng.normal(0, noise_std, size=E)
+    # Building graph object
+    sim_graph = ArrayEdgeGraph.from_edge_panel(
+        X_sim,
+        edge_list,
+        n_nodes=K,
+        time_labels=time_index
+    )
 
-    return X, time_cov, graph       
+    # Fitting the extended GNAR-edge model
+    learner = GNAREdgeGlobalMultiCovLearner(
+        graph=sim_graph,
+        L=L,
+        stages_per_lag=stages_per_lag,
+        train_periods=time_index,
+        use_ols=True,
+        edge_covariates=edge_covariates_sim,
+        exog_series=exog_series_sim,
+        interaction_pairs=interaction_pairs,
+    )
+
+    learner.fit(
+        use_ols=True,
+        verbose=False
+    )
+
+    # Building design matrix and computing standard errors
+    D, feature_names = build_design_matrix(
+        learner,
+        learner.train_set
+    )
+    se_theta = compute_ols_standard_errors(
+        learner,
+        D
+    )
+
+    # Extracting estimated beta coefficients in the fitted order
+    beta_pairs_actual = learner.ols_beta_pairs_
+
+    beta_hat_array = np.array([
+        learner.beta[pair]
+        for pair in beta_pairs_actual
+    ])
+
+    beta_true_array = np.array([
+        true_beta_dict.get(pair, np.nan)
+        for pair in beta_pairs_actual
+    ])
+
+    # Extracting time-covariate truth only when it is included
+    gamma_time_true = (
+        [true_gamma_time_cov]
+        if time_cov_name in learner.time_cov_names
+        else []
+    )
+
+    # Combining all estimated parameters
+    theta_hat = np.concatenate([
+        learner.alpha.flatten(),
+        beta_hat_array,
+        np.array([
+            learner.gamma_[name]
+            for name in learner.edge_cov_names
+        ]),
+        np.array([
+            learner.gamma_[name]
+            for name in learner.time_cov_names
+        ]),
+        np.array([
+            learner.gamma_[f"{e}_X_{t}"]
+            for e, t in learner.interaction_pairs
+        ]),
+    ])
+
+    # Combining all true parameter values in the same order
+    true_theta = np.concatenate([
+        np.array(true_alpha),
+        beta_true_array,
+        np.array(list(true_gamma_edge_cov.values())),
+        np.array(gamma_time_true),
+        np.array(list(true_gamma_interaction.values())),
+    ])
+
+    # Computing 95% confidence intervals
+    ci_lower = theta_hat - 1.96 * se_theta
+    ci_upper = theta_hat + 1.96 * se_theta
+
+    # Determining whether the true value lies inside the confidence interval
+    covers_true = (
+        (true_theta >= ci_lower)
+        & (true_theta <= ci_upper)
+    )
+
+    # Parameter names in the same order as theta_hat
+    param_names = (
+        [f"alpha{l}" for l in range(1, L + 1)]
+        + [
+            f"beta{l},{r}"
+            for l, r in beta_pairs_actual
+        ]
+        + list(true_gamma_edge_cov.keys())
+        + (
+            [time_cov_name]
+            if (
+                time_cov_name in learner.time_cov_names
+                and true_gamma_time_cov != 0.0
+            )
+            else []
+        )
+        + [
+            f"{e}_X_{t}"
+            for e, t in interaction_pairs
+        ]
+    )
+
+    # Building final per-parameter results table
+    result_table = pd.DataFrame({
+        "parameter": param_names,
+        "true_value": true_theta,
+        "estimated": theta_hat,
+        "ci_lower": ci_lower,
+        "ci_upper": ci_upper,
+        "covers_true": covers_true,
+    })
+
+    return result_table, learner, graph
 
 def compute_ols_standard_errors(learner, D):
     """
@@ -1693,28 +1913,32 @@ def run_single_step_prediction_replication_learner(K, density, structure, rdp_ra
     return learner_full, learner_full.exog_series["sim_temp"]
 
 
-def simulate_full_model_misspec(edge_list, K, L, stages_per_lag,
-                                  true_alpha, true_beta_dict, edge_covariates, true_gamma_edge_cov,
-                                  true_gamma_time_cov, interaction_pairs, true_gamma_interaction,
-                                  T, noise_std=1.0, noise_dist="normal", t_df=3, correlation=0.0,
-                                  time_cov_name="sim_temp", seed=None):
+def simulate_full_model_misspec(
+    edge_list, K, L, stages_per_lag,
+    true_alpha, true_beta_dict, edge_covariates, true_gamma_edge_cov,
+    true_gamma_time_cov, interaction_pairs, true_gamma_interaction,
+    T, noise_std=1.0, noise_dist="normal", t_df=3, correlation=0.0,
+    time_cov_name="sim_temp", seed=None
+):
     """
-    Simulate edge-weight time series from the extended GNAR-edge model, with
-    configurable innovation distributions for robustness/misspecification testing.
+    Simulate edge-weight time series under alternative innovation distributions.
 
-    This extends `simulate_full_model` by allowing the model's innovations to
-    depart from the standard i.i.d. Gaussian assumption in two ways: heavy-tailed
-    (Student's t) innovations, and innovations correlated across edges at each
-    time point (drawn from a multivariate normal distribution with constant
-    pairwise correlation). All other aspects of the data-generating process
-    (autoregressive, network-effect, edge covariate, exogenous, and interaction
-    terms) are unchanged and are governed by the same true parameters as the
-    correctly-specified model.
+    This function extends ``simulate_full_model`` for robustness and model
+    misspecification experiments. The autoregressive, network, edge-covariate,
+    time-varying covariate, and interaction components of the data-generating
+    process are unchanged, while the innovation distribution can depart from
+    the standard independent Gaussian specification.
+
+    Innovations may be independent Gaussian, heavy-tailed Student's t, or
+    correlated Gaussian. For correlated innovations, edges are randomly
+    partitioned into disjoint pairs and the specified correlation is imposed
+    between the innovations of the two edges within each pair. Innovations
+    belonging to different pairs are uncorrelated.
 
     Parameters
     ----------
     edge_list : list of tuple of int
-        Edges of the network, as (i, j) node-index pairs.
+        Edges of the network, represented as ``(i, j)`` node-index pairs.
     K : int
         Number of nodes in the network.
     L : int
@@ -1722,57 +1946,59 @@ def simulate_full_model_misspec(edge_list, K, L, stages_per_lag,
     stages_per_lag : list of list of int
         Neighbour stages included at each lag.
     true_alpha : list of float
-        True autoregressive coefficients, one per lag.
+        True autoregressive coefficients, one for each lag.
     true_beta_dict : dict of {(int, int): float}
-        True network-effect coefficients, keyed by (lag, stage) pairs.
+        True neighbour-effect coefficients, indexed by ``(lag, stage)``.
     edge_covariates : dict of {str: np.ndarray}
-        Mapping from edge covariate name to its (E,) array of values.
+        Mapping from edge-covariate names to arrays of length ``E``.
     true_gamma_edge_cov : dict of {str: float}
-        True coefficients for each edge covariate in edge_covariates.
+        True coefficients associated with the edge-level covariates.
     true_gamma_time_cov : float
-        True coefficient for the simulated time-varying exogenous series.
+        True coefficient associated with the time-varying exogenous covariate.
     interaction_pairs : list of tuple of str
-        (edge_cov_name, time_cov_name) pairs specifying which interaction terms
-        to include in the simulated process. The time_cov_name element of each
-        pair must match `time_cov_name`.
+        Pairs specifying interactions between edge-level and time-varying
+        covariates.
     true_gamma_interaction : dict of {(str, str): float}
-        True coefficients for each interaction term in interaction_pairs, keyed
-        by (edge_cov_name, time_cov_name).
+        True coefficients associated with the interaction terms.
     T : int
         Length of the simulated time series.
-    noise_std : float, default 1.0
-        Target standard deviation of the innovations. For noise_dist="t", the
-        t-distribution is rescaled so its variance matches noise_std**2, ensuring
-        heavy-tailed and normal innovations are compared on equal overall scale.
-    noise_dist : {"normal", "t", "correlated"}, default "normal"
-        Distribution used to generate innovations at each time step:
-        "normal" draws i.i.d. N(0, noise_std**2) innovations for each edge;
-        "t" draws i.i.d. (variance-matched) Student's t innovations for each edge;
-        "correlated" draws a single multivariate normal vector per time step,
-        with constant pairwise correlation `correlation` across edges.
-    t_df : int, default 3
-        Degrees of freedom for the t-distribution, used only if noise_dist="t".
-        Smaller values produce heavier tails.
-    correlation : float, default 0.0
-        Constant pairwise correlation between edges' innovations at a given time
-        point, used only if noise_dist="correlated".
-    time_cov_name : str, default "sim_temp"
-        Name assigned to the simulated time-varying exogenous series. Must match
-        the second element of every tuple in `interaction_pairs`, and the key
-        used in `true_gamma_interaction`.
+    noise_std : float, default=1.0
+        Marginal standard deviation of the innovations. Student's t
+        innovations are rescaled to have variance ``noise_std**2``.
+    noise_dist : {"normal", "t", "correlated"}, default="normal"
+        Innovation distribution. ``"normal"`` produces independent Gaussian
+        innovations, ``"t"`` produces independent variance-matched Student's
+        t innovations, and ``"correlated"`` produces Gaussian innovations
+        with the specified within-pair correlation.
+    t_df : int, default=3
+        Degrees of freedom of the Student's t innovations. Used only when
+        ``noise_dist="t"``.
+    correlation : float, default=0.0
+        Correlation imposed between innovations of edges belonging to the
+        same randomly assigned pair when ``noise_dist="correlated"``.
+        Correlation between different pairs is zero.
+    time_cov_name : str, default="sim_temp"
+        Name assigned to the simulated time-varying exogenous series.
     seed : int, optional
-        Random seed controlling network generation, the exogenous series, and
-        the innovation draws.
+        Random seed controlling simulation and the random assignment of edges
+        to correlation pairs.
 
     Returns
     -------
     X : np.ndarray, shape (T, E)
-        Simulated edge-weight panel.
+        Simulated edge-weight time-series panel.
     time_cov : np.ndarray, shape (T,)
-        Simulated time-varying exogenous series (AR(1) process).
+        Simulated time-varying exogenous series.
     graph : object
-        The underlying network object constructed from edge_list, as returned
-        by build_W_matrices.
+        Underlying network object returned by ``build_W_matrices``.
+
+    Notes
+    -----
+    For ``noise_dist="t"``, the Student's t innovations are rescaled so that
+    their marginal variance matches that of the Gaussian baseline. For
+    ``noise_dist="correlated"``, the marginal variance of each innovation also
+    remains ``noise_std**2``; only the contemporaneous dependence structure
+    across paired edges is changed.
     """
     rng = np.random.default_rng(seed)
     E = len(edge_list)
@@ -1784,8 +2010,7 @@ def simulate_full_model_misspec(edge_list, K, L, stages_per_lag,
 
     #precompute correlated-noise covariance once, if needed
     if noise_dist == "correlated":
-        cov_matrix = np.full((E, E), correlation * noise_std**2)
-        np.fill_diagonal(cov_matrix, noise_std**2)
+        cov_matrix = build_block_correlated_covariance(E, correlation, noise_std, block_size=2, seed=seed)
 
     X = np.zeros((T, E))
     X[:L, :] = rng.normal(0, noise_std, size=(L, E))
@@ -1822,7 +2047,59 @@ def simulate_full_model_misspec(edge_list, K, L, stages_per_lag,
 
     return X, time_cov, graph
 
+def build_block_correlated_covariance(E, correlation, noise_std=1.0, block_size=2, seed=None):
+    """
+    Construct a block-correlated covariance matrix for edge innovations.
 
+    The edges are randomly partitioned into disjoint blocks of size
+    ``block_size``. Innovations for edges within the same block have the
+    specified pairwise correlation, while innovations belonging to different
+    blocks are uncorrelated. This construction permits both positive and
+    negative within-block correlations without imposing a common correlation
+    across the full edge system.
+
+    Parameters
+    ----------
+    E : int
+        Number of edge-level innovation series.
+    correlation : float
+        Pairwise correlation imposed between innovations within each block.
+        For the default ``block_size=2``, values between -1 and 1 produce a
+        valid within-block correlation matrix.
+    noise_std : float, default=1.0
+        Marginal standard deviation of each edge innovation.
+    block_size : int, default=2
+        Number of edges assigned to each correlation block.
+    seed : int, optional
+        Random seed controlling the permutation used to assign edges to
+        blocks.
+
+    Returns
+    -------
+    np.ndarray
+        An ``(E, E)`` covariance matrix with marginal variance
+        ``noise_std**2``, the specified correlation within blocks, and zero
+        covariance between blocks.
+
+    Notes
+    -----
+    If ``E`` is not divisible by ``block_size``, any remaining edges are
+    independent of all other edges. With the default ``block_size=2``, the
+    construction pairs edges randomly and allows relatively strong positive
+    or negative correlations within each pair.
+    """
+    rng = np.random.default_rng(seed)
+    cov_matrix = np.eye(E) * noise_std**2
+
+    edge_order = rng.permutation(E)
+    for i in range(0, E - block_size + 1, block_size):
+        block_edges = edge_order[i:i+block_size]
+        for a in block_edges:
+            for b in block_edges:
+                if a != b:
+                    cov_matrix[a, b] = correlation * noise_std**2
+
+    return cov_matrix
 
 def run_misspecification_replication(K, density, structure, rdp_radius_cache, L, stages_per_lag,
                                       true_alpha, true_beta_dict, true_gamma_edge_cov,
@@ -1878,14 +2155,17 @@ def run_misspecification_replication(K, density, structure, rdp_radius_cache, L,
         Length of the simulated time series.
     seed : int
         Random seed used for reproducibility.
-    noise_dist : {"normal", "t"}, default="normal"
-        Distribution used to generate the innovation process.
+    noise_dist : {"normal", "t", "correlated"}, default="normal"
+        Distribution used to generate the innovation process. Correlated
+        innovations are Gaussian with dependence imposed between randomly
+        paired edges.
     t_df : int, default=3
         Degrees of freedom for the Student's t innovations when
         ``noise_dist="t"``.
     correlation : float, default=0.0
-        Pairwise correlation among innovation terms. A value of zero corresponds
-        to independent innovations.
+        Within-pair correlation of the edge innovations when
+        ``noise_dist="correlated"``. Edges are randomly assigned to disjoint
+        pairs, with zero innovation correlation between different pairs.
     rewiring_prob : float, default=0.0
         Probability of rewiring each edge before fitting the model. A value of
         zero fits the model using the true network structure.
@@ -2060,143 +2340,135 @@ def rewire_edges(edge_list, K, rewiring_prob, seed=None):
             rewired.append((i, j))
     return rewired
 
-
-def simulate_full_model_exog_correlated(
-    edge_list,
-    K,
-    L,
-    stages_per_lag,
-    true_alpha,
-    true_beta_dict,
-    edge_covariates,
-    true_gamma_edge_cov,
-    true_gamma_time_cov,
-    interaction_pairs,
-    true_gamma_interaction,
-    T,
-    noise_std=1.0,
-    exog_u_correlation=0.0,
-    seed=None,
-):
+def simulate_full_model_exog_correlated(edge_list, K, L, stages_per_lag,
+                                          true_alpha, true_beta_dict, edge_covariates, true_gamma_edge_cov,
+                                          true_gamma_time_cov, interaction_pairs, true_gamma_interaction,
+                                          T, noise_std=1.0, exog_u_correlation=0.0, time_cov_name="sim_temp",
+                                          seed=None):
     """
-    Simulate a GNAR-edge process with endogenous exogenous covariates.
-
-    This function generates a multivariate GNAR-edge time series in which the
-    time-varying exogenous covariate and the innovation process share a common
-    random component. Consequently, the exogenous variable is correlated with
-    the model innovations, violating the exogeneity assumption required for
-    unbiased ordinary least squares estimation.
-
-    The simulated process includes autoregressive effects, neighbour effects,
-    edge-level covariate effects, a time-varying exogenous covariate, and
-    optional interaction terms.
-
-    Parameters
-    ----------
-    edge_list : list of tuple
-        Undirected edge list represented as node-index pairs ``(u, v)``.
-    K : int
-        Number of nodes in the network.
-    L : int
-        Number of autoregressive lags.
-    stages_per_lag : list of list of int
-        Neighbour stages included at each lag.
-    true_alpha : array-like
-        True autoregressive coefficients.
-    true_beta_dict : dict
-        Dictionary mapping ``(lag, stage)`` pairs to the true neighbour-effect
-        coefficients.
-    edge_covariates : dict
-        Dictionary of edge-level covariate arrays.
-    true_gamma_edge_cov : dict
-        Dictionary mapping edge-covariate names to their true coefficients.
-    true_gamma_time_cov : float
-        True coefficient for the time-varying exogenous covariate.
-    interaction_pairs : list of tuple
-        Edge/time covariate interaction terms included in the simulated model.
-    true_gamma_interaction : dict
-        Dictionary of true interaction coefficients.
-    T : int
-        Length of the simulated time series.
-    noise_std : float, default=1.0
-        Standard deviation of the innovation process.
-    exog_u_correlation : float, default=0.0
-        Correlation between the innovation driving the exogenous covariate and
-        the edge innovation process. A value of zero corresponds to an exogenous
-        covariate, while larger values introduce increasing endogeneity.
-    seed : int, optional
-        Random seed used for reproducibility.
-
-    Returns
-    -------
-    tuple
-        A triple ``(X, time_cov, graph)`` where
-
-        - ``X`` is the simulated edge-weight panel of shape ``(T, E)``.
-        - ``time_cov`` is the simulated endogenous exogenous time series.
-        - ``graph`` is the corresponding ``ArrayEdgeGraph``.
-
-    Notes
-    -----
-    Endogeneity is introduced by allowing the innovation driving the exogenous
-    AR(1) process and the edge innovation vector to share a common Gaussian
-    shock. The parameter ``exog_u_correlation`` controls the strength of this
-    dependence while preserving the marginal variances of both processes.
-    """
+        Simulate a GNAR-edge process with endogenous exogenous covariates.
+    
+        This function generates a multivariate GNAR-edge time series in which the
+        time-varying exogenous covariate and the innovation process share a common
+        random component. Consequently, the exogenous variable is correlated with
+        the model innovations, violating the exogeneity assumption required for
+        unbiased ordinary least squares estimation.
+    
+        The simulated process includes autoregressive effects, neighbour effects,
+        edge-level covariate effects, a time-varying exogenous covariate, and
+        optional interaction terms.
+    
+        Parameters
+        ----------
+        edge_list : list of tuple
+            Undirected edge list represented as node-index pairs ``(u, v)``.
+        K : int
+            Number of nodes in the network.
+        L : int
+            Number of autoregressive lags.
+        stages_per_lag : list of list of int
+            Neighbour stages included at each lag.
+        true_alpha : array-like
+            True autoregressive coefficients.
+        true_beta_dict : dict
+            Dictionary mapping ``(lag, stage)`` pairs to the true neighbour-effect
+            coefficients.
+        edge_covariates : dict
+            Dictionary of edge-level covariate arrays.
+        true_gamma_edge_cov : dict
+            Dictionary mapping edge-covariate names to their true coefficients.
+        true_gamma_time_cov : float
+            True coefficient for the time-varying exogenous covariate.
+        interaction_pairs : list of tuple
+            Edge/time covariate interaction terms included in the simulated model.
+        true_gamma_interaction : dict
+            Dictionary of true interaction coefficients.
+        T : int
+            Length of the simulated time series.
+        noise_std : float, default=1.0
+            Standard deviation of the innovation process.
+        exog_u_correlation : float, default 0.0
+            Target correlation between z_t's innovations and the shared component of
+            u_t. Must lie in [-1, 1]. Supports negative values: the magnitude of the
+            correlation determines the weight given to the shared random component
+            (via sqrt(|rho|)), and the sign is applied separately by flipping the
+            shared component's contribution, avoiding sqrt of a negative number.
+        time_cov_name : str, default "sim_temp"
+            Name assigned to the simulated time-varying exogenous series.
+        seed : int, optional
+            Random seed used for reproducibility.
+    
+        Returns
+        -------
+        tuple
+            A triple ``(X, time_cov, graph)`` where
+    
+            - ``X`` is the simulated edge-weight panel of shape ``(T, E)``.
+            - ``time_cov`` is the simulated endogenous exogenous time series.
+            - ``graph`` is the corresponding ``ArrayEdgeGraph``.
+    
+        Notes
+        -----
+        Endogeneity is introduced by allowing the innovation driving the exogenous
+        AR(1) process and the edge innovation vector to share a common Gaussian
+        shock. The parameter ``exog_u_correlation`` controls the strength of this
+        dependence while preserving the marginal variances of both processes.
+        """
+    if not -1.0 <= exog_u_correlation <= 1.0:
+        raise ValueError(f"exog_u_correlation must lie in [-1, 1], got {exog_u_correlation}.")
 
     rng = np.random.default_rng(seed)
     E = len(edge_list)
 
-    #building neighbourhood matrices
     needed_r = sorted({r for rs in stages_per_lag for r in rs})
     W_dict, graph = build_W_matrices(edge_list, K, needed_r)
 
-    #calibrating exogenous innovations
-    z_phi, z_mean, z_sd = 0.7, 30.0, 3.0
-    z_innovation_sd = z_sd * np.sqrt(1.0 - z_phi**2)
+    #split correlation into sign and magnitude, so sqrt is always applied to a
+    #non-negative value, and the sign is applied separately to the shared component
+    rho = exog_u_correlation
+    sign = np.sign(rho) if rho != 0 else 1.0
+    abs_rho = abs(rho)
 
-    #initialising simulated exogenous series
+    #first, draw the shared random component used to correlate z_t with u_t
+    shared_innovations = rng.normal(0, 1, size=T)
+
+    #build z_t as an AR(1) process, with its innovation partly driven by shared_innovations
+    z_phi, z_mean, z_sd = 0.7, 30, 3
+    z_innovation_sd = z_sd * np.sqrt(1 - z_phi**2)
     time_cov = np.zeros(T)
     time_cov[0] = rng.normal(z_mean, z_sd)
+    for t in range(1, T):
+        own_innov = rng.normal(0, z_innovation_sd)
+        combined_innov = (
+            sign * np.sqrt(abs_rho) * shared_innovations[t] * z_innovation_sd
+            + np.sqrt(1 - abs_rho) * own_innov
+        )
+        time_cov[t] = z_mean + z_phi * (time_cov[t-1] - z_mean) + combined_innov
 
     X = np.zeros((T, E))
     X[:L, :] = rng.normal(0, noise_std, size=(L, E))
 
-    
-    rho = float(exog_u_correlation)
-    sqrt_rho = np.sqrt(rho)
-    sqrt_1_minus_rho = np.sqrt(1.0 - rho)
-    #injecting shared shock into exogenous series innovations and model innovations
     for t in range(L, T):
-        shared_shock = rng.normal(0.0, 1.0)
-
-        z_own_shock = rng.normal(0.0, 1.0)
-        z_shock = (
-            sqrt_rho * shared_shock + sqrt_1_minus_rho * z_own_shock
-        ) * z_innovation_sd
-        time_cov[t] = z_mean + z_phi * (time_cov[t - 1] - z_mean) + z_shock
-
-        u_idiosyncratic = rng.normal(0.0, 1.0, size=E)
-        u_t = (
-            sqrt_rho * shared_shock + sqrt_1_minus_rho * u_idiosyncratic
-        ) * noise_std
-
-        #constructing remaining components of the model (autoregressive, network and exogenous terms)
         pred = np.zeros(E)
-
         for l in range(1, L + 1):
-            pred += true_alpha[l - 1] * X[t - l, :]
-            for r in stages_per_lag[l - 1]:
-                pred += true_beta_dict[(l, r)] * (W_dict[r] @ X[t - l, :])
+            pred += true_alpha[l-1] * X[t-l, :]
+            for r in stages_per_lag[l-1]:
+                pred += true_beta_dict[(l, r)] * (W_dict[r] @ X[t-l, :])
 
         for name, gamma_val in true_gamma_edge_cov.items():
             pred += gamma_val * edge_covariates[name]
 
         pred += true_gamma_time_cov * time_cov[t]
 
-        for edge_name, _ in interaction_pairs:
-            gamma_val = true_gamma_interaction[(edge_name, "sim_temp")]
+        for (edge_name, cov_name) in interaction_pairs:
+            gamma_val = true_gamma_interaction[(edge_name, cov_name)]
             pred += gamma_val * edge_covariates[edge_name] * time_cov[t]
+
+        #u_t's mean-across-edges component shares the same shared_innovations[t] used for z_t
+        #individual edges get their own idiosyncratic noise on top of this shared component
+        shared_component = sign * np.sqrt(abs_rho) * shared_innovations[t] * noise_std
+        idiosyncratic = rng.normal(0, noise_std * np.sqrt(1 - abs_rho), size=E)
+        u_t = shared_component + idiosyncratic
 
         X[t, :] = pred + u_t
 
@@ -2871,3 +3143,710 @@ def build_per_parameter_interaction_comparison(results_with, results_without,
 
     return pd.DataFrame(rows)
 
+def build_gamma_comparison_with_increase(
+    with_df,
+    without_df,
+    gamma_labels_with,
+    gamma_labels_without,
+):
+    """
+    Compare gamma-parameter estimation errors between two model
+    specifications and calculate absolute and percentage increases.
+
+    Parameters
+    ----------
+    with_df : pandas.DataFrame
+        Summary table for the model including the interaction term.
+        Must contain columns ``"Parameter"`` and ``"Error"``.
+    without_df : pandas.DataFrame
+        Summary table for the model without the interaction term.
+        Must contain columns ``"Parameter"`` and ``"Error"``.
+    gamma_labels_with : list
+        Parameter labels included in the model with the interaction.
+    gamma_labels_without : list
+        Parameter labels included in the model without the interaction.
+        Only parameters present in this list are compared.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Comparison table containing the error for each model and the
+        absolute and percentage increase in error for the model with
+        the interaction.
+
+    Notes
+    -----
+    The interaction parameter itself is excluded because it has no
+    corresponding parameter in the no-interaction specification.
+    """
+
+    # Restrict to parameters present in both regimes
+    shared_params = [
+        parameter
+        for parameter in gamma_labels_without
+        if parameter in gamma_labels_with
+    ]
+
+    with_subset = with_df[
+        with_df["Parameter"].isin(shared_params)
+    ].copy()
+
+    without_subset = without_df[
+        without_df["Parameter"].isin(shared_params)
+    ].copy()
+
+    # Rename error columns before merging
+    with_subset = with_subset.rename(
+        columns={"Error": "Error_with"}
+    )
+
+    without_subset = without_subset.rename(
+        columns={"Error": "Error_without"}
+    )
+
+    merged = with_subset.merge(
+        without_subset,
+        on="Parameter",
+        how="inner",
+    )
+
+    merged["Absolute Increase"] = (
+        merged["Error_with"]
+        - merged["Error_without"]
+    ).round(4)
+
+    merged["Percentage Increase"] = (
+        (
+            merged["Error_with"]
+            - merged["Error_without"]
+        )
+        / merged["Error_without"]
+        * 100
+    ).round(1)
+
+    return merged
+
+def build_rewiring_gamma_comparison(
+    rewiring_prob_value,
+    rewiring_results_with,
+    rewiring_results_without,
+    gamma_labels_with,
+    gamma_labels_without,
+    param_labels,
+    structure="SBM",
+):
+    """
+    Compare gamma-parameter RMSE between interaction and no-interaction
+    models under a specified network rewiring probability.
+
+    Parameters
+    ----------
+    rewiring_prob_value : float
+        Rewiring probability at which the comparison is performed.
+    rewiring_results_with : list
+        Simulation results for the model with the interaction term.
+    rewiring_results_without : list
+        Simulation results for the model without the interaction term.
+    gamma_labels_with : list
+        Gamma parameter labels for the model with the interaction term.
+    gamma_labels_without : list
+        Gamma parameter labels for the model without the interaction term.
+    param_labels : dict
+        Mapping from internal parameter names to display labels.
+    structure : {"ER", "SBM", "RDP"}, default="SBM"
+        Network structure included in the comparison.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Wide-format table indexed by parameter. Columns contain the mean
+        RMSE for each model, together with the absolute and percentage
+        increase in RMSE for the model with the interaction.
+
+    Notes
+    -----
+    Parameters that are not present in both model specifications are
+    excluded from the comparison.
+    """
+
+    rows = []
+
+    for label, results, gamma_labels_here in [
+        (
+            "With interaction",
+            rewiring_results_with,
+            gamma_labels_with,
+        ),
+        (
+            "No interaction",
+            rewiring_results_without,
+            gamma_labels_without,
+        ),
+    ]:
+        df = build_rewiring_gamma_df(
+            results,
+            gamma_labels_here,
+        )
+
+        df = df[
+            (df["rewiring_prob"] == rewiring_prob_value)
+            & (df["structure"] == structure)
+        ]
+
+        df_summary = (
+            df.groupby("covariate")["RMSE"]
+            .mean()
+        )
+
+        for parameter, value in df_summary.items():
+            rows.append({
+                "Regime": label,
+                "Parameter": param_labels.get(
+                    parameter,
+                    parameter,
+                ),
+                "RMSE": value,
+            })
+
+    long_df = pd.DataFrame(rows)
+
+    wide_df = long_df.pivot(
+        index="Parameter",
+        columns="Regime",
+        values="RMSE",
+    )
+
+    # Keep only parameters shared across both regimes
+    wide_df = wide_df.dropna()
+
+    wide_df["Absolute Increase"] = (
+        wide_df["With interaction"]
+        - wide_df["No interaction"]
+    ).round(4)
+
+    wide_df["Percentage Increase"] = (
+        (
+            wide_df["With interaction"]
+            - wide_df["No interaction"]
+        )
+        / wide_df["No interaction"]
+        * 100
+    ).round(1)
+
+    return wide_df.round(4)
+
+def build_exogcorr_gamma_comparison(
+    correlation_value,
+    exog_corr_results_with,
+    exog_corr_results_without,
+    beta_pair_labels_with,
+    beta_pair_labels_without,
+    gamma_labels_with,
+    gamma_labels_without,
+    param_labels,
+    structure="SBM",
+):
+    """
+    Compare gamma-parameter estimation errors between interaction and
+    no-interaction models under a specified innovation correlation.
+
+    Parameters
+    ----------
+    correlation_value : float
+        Innovation correlation at which the comparison is performed.
+    exog_corr_results_with : list
+        Simulation results for the model with the interaction term.
+    exog_corr_results_without : list
+        Simulation results for the model without the interaction term.
+    beta_pair_labels_with : list
+        Beta parameter labels for the model with the interaction term.
+    beta_pair_labels_without : list
+        Beta parameter labels for the model without the interaction term.
+    gamma_labels_with : list
+        Gamma parameter labels for the model with the interaction term.
+    gamma_labels_without : list
+        Gamma parameter labels for the model without the interaction term.
+    param_labels : dict
+        Mapping from internal parameter names to display labels.
+    structure : {"ER", "SBM", "RDP"}, default="SBM"
+        Network structure included in the comparison.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Wide-format comparison table containing the mean absolute
+        estimation error for each model, together with the absolute and
+        percentage increase in error for the model with the interaction.
+
+    Notes
+    -----
+    Only parameters shared across both model specifications are included.
+    The interaction parameter itself is therefore excluded.
+    """
+
+    rows = []
+
+    for label, results, beta_labels_here, gamma_labels_here in [
+        (
+            "With interaction",
+            exog_corr_results_with,
+            beta_pair_labels_with,
+            gamma_labels_with,
+        ),
+        (
+            "No interaction",
+            exog_corr_results_without,
+            beta_pair_labels_without,
+            gamma_labels_without,
+        ),
+    ]:
+        df = build_exog_corr_error_df(
+            results,
+            beta_labels_here,
+            gamma_labels_here,
+            correlation_to_show=correlation_value,
+        )
+
+        df["param_type"] = (
+            df["param_type"]
+            .replace(param_labels)
+        )
+
+        gamma_names = [
+            param_labels.get(
+                gamma,
+                gamma,
+            )
+            for gamma in gamma_labels_here
+        ]
+
+        df = df[
+            (df["structure"] == structure)
+            & (
+                df["setting"]
+                .str.startswith("correlated")
+            )
+            & (
+                df["param_type"]
+                .isin(gamma_names)
+            )
+        ]
+
+        df_summary = (
+            df.groupby("param_type")["abs_error"]
+            .mean()
+        )
+
+        for parameter, value in df_summary.items():
+            rows.append({
+                "Regime": label,
+                "Parameter": parameter,
+                "Error": value,
+            })
+
+    long_df = pd.DataFrame(rows)
+
+    wide_df = long_df.pivot(
+        index="Parameter",
+        columns="Regime",
+        values="Error",
+    )
+
+    # Keep only parameters shared across both regimes
+    wide_df = wide_df.dropna()
+
+    wide_df["Absolute Increase"] = (
+        wide_df["With interaction"]
+        - wide_df["No interaction"]
+    ).round(4)
+
+    wide_df["Percentage Increase"] = (
+        (
+            wide_df["With interaction"]
+            - wide_df["No interaction"]
+        )
+        / wide_df["No interaction"]
+        * 100
+    ).round(1)
+
+    return wide_df.round(4)
+
+def simulate_full_model_misspec_unscaled(
+    edge_list,
+    K,
+    L,
+    stages_per_lag,
+    true_alpha,
+    true_beta_dict,
+    edge_covariates,
+    true_gamma_edge_cov,
+    true_gamma_time_cov,
+    interaction_pairs,
+    true_gamma_interaction,
+    T,
+    noise_std=1.0,
+    noise_dist="normal",
+    t_df=3,
+    time_cov_name="sim_temp",
+    seed=None,
+):
+    """
+    Simulate edge-weight time series under alternative innovation
+    distributions without variance-matching the Student's t innovations.
+
+    This function follows ``simulate_full_model_misspec`` but deliberately
+    does not rescale Student's t innovations to have the same marginal
+    variance as the Gaussian innovations. Consequently, the innovation
+    variance depends on the degrees of freedom ``t_df``.
+
+    Parameters
+    ----------
+    edge_list : list of tuple of int
+        Edges of the network, represented as ``(i, j)`` node-index pairs.
+    K : int
+        Number of nodes in the network.
+    L : int
+        Number of autoregressive lags.
+    stages_per_lag : list of list of int
+        Neighbour stages included at each lag.
+    true_alpha : list of float
+        True autoregressive coefficients.
+    true_beta_dict : dict
+        True neighbour-effect coefficients indexed by ``(lag, stage)``.
+    edge_covariates : dict
+        Mapping from edge-covariate names to arrays of length ``E``.
+    true_gamma_edge_cov : dict
+        True coefficients associated with edge-level covariates.
+    true_gamma_time_cov : float
+        True coefficient associated with the time-varying exogenous
+        covariate.
+    interaction_pairs : list of tuple
+        Edge/time covariate interaction terms.
+    true_gamma_interaction : dict
+        True interaction coefficients.
+    T : int
+        Length of the simulated time series.
+    noise_std : float, default=1.0
+        Scale parameter for the innovations. For Student's t innovations,
+        this is multiplied directly by the raw t random variable and is
+        therefore not a marginal standard deviation.
+    noise_dist : {"normal", "t"}, default="normal"
+        Innovation distribution.
+    t_df : int, default=3
+        Degrees of freedom for Student's t innovations.
+    time_cov_name : str, default="sim_temp"
+        Name assigned to the simulated time-varying exogenous series.
+    seed : int, optional
+        Random seed used for reproducibility.
+
+    Returns
+    -------
+    X : np.ndarray
+        Simulated edge-weight time-series panel of shape ``(T, E)``.
+    time_cov : np.ndarray
+        Simulated time-varying exogenous series.
+    graph : object
+        Underlying network graph.
+
+    Notes
+    -----
+    Unlike ``simulate_full_model_misspec``, Student's t innovations are
+    generated as ``standard_t(t_df) * noise_std`` with no variance
+    rescaling. Their variance is therefore ``noise_std**2 * t_df /
+    (t_df - 2)`` when ``t_df > 2``.
+    """
+
+    rng = np.random.default_rng(seed)
+    E = len(edge_list)
+
+    needed_r = sorted({
+        r
+        for rs in stages_per_lag
+        for r in rs
+    })
+    #building neighbourhood matrices
+    W_dict, graph = build_W_matrices(
+        edge_list,
+        K,
+        needed_r,
+    )
+    #building exogenous series
+    time_cov = simulate_ar1_exog(
+        T,
+        phi=0.7,
+        mean=30,
+        sd=3,
+        seed=seed,
+    )
+
+    X = np.zeros((T, E))
+
+    X[:L, :] = rng.normal(
+        0,
+        noise_std,
+        size=(L, E),
+    )
+
+    #simulating remaining parts of the model and predicting next period
+    for t in range(L, T):
+        pred = np.zeros(E)
+
+        for l in range(1, L + 1):
+            pred += (
+                true_alpha[l - 1]
+                * X[t - l, :]
+            )
+
+            for r in stages_per_lag[l - 1]:
+                pred += (
+                    true_beta_dict[(l, r)]
+                    * (W_dict[r] @ X[t - l, :])
+                )
+
+        for name, gamma_val in true_gamma_edge_cov.items():
+            pred += (
+                gamma_val
+                * edge_covariates[name]
+            )
+
+        pred += (
+            true_gamma_time_cov
+            * time_cov[t]
+        )
+
+        for edge_name, cov_name in interaction_pairs:
+            gamma_val = true_gamma_interaction[
+                (edge_name, cov_name)
+            ]
+
+            pred += (
+                gamma_val
+                * edge_covariates[edge_name]
+                * time_cov[t]
+            )
+
+        #noise generation, by distribution
+        if noise_dist == "normal":
+            noise = rng.normal(
+                0,
+                noise_std,
+                size=E,
+            )
+
+        elif noise_dist == "t":
+            #no rescaling -- raw t-distributed noise
+            noise = (
+                rng.standard_t(t_df, size=E)
+                * noise_std
+            )
+
+        else:
+            raise ValueError(
+                "noise_dist must be 'normal' or 't'"
+            )
+
+        X[t, :] = pred + noise
+
+    return X, time_cov, graph
+
+def run_heavy_tail_prediction_replication_unscaled(
+    K,
+    density,
+    structure,
+    rdp_radius_cache,
+    L,
+    stages_per_lag,
+    true_alpha,
+    true_beta_dict,
+    true_gamma_edge_cov,
+    true_gamma_time_cov,
+    interaction_pairs,
+    true_gamma_interaction,
+    T,
+    seed,
+    noise_dist="normal",
+    t_df=3,
+):
+    """
+    Run one one-step-ahead prediction replication using unscaled
+    Student's t innovations.
+
+    The synthetic data are generated from the specified GNAR-edge DGP
+    and the final observation is held out. The extended GNAR-edge model
+    is fitted to the first ``T - 1`` observations and used to produce a
+    one-step-ahead forecast for every edge.
+
+    Parameters
+    ----------
+    K : int
+        Number of nodes in the simulated network.
+    density : float
+        Target network density.
+    structure : {"ER", "SBM", "RDP"}
+        Network generation mechanism.
+    rdp_radius_cache : dict
+        Cache of calibrated RDP radii.
+    L : int
+        Number of autoregressive lags.
+    stages_per_lag : list of list of int
+        Neighbour stages included at each lag.
+    true_alpha : array-like
+        True autoregressive coefficients.
+    true_beta_dict : dict
+        True neighbour-effect coefficients.
+    true_gamma_edge_cov : dict
+        True edge-covariate coefficients.
+    true_gamma_time_cov : float
+        True time-varying exogenous coefficient.
+    interaction_pairs : list of tuple
+        Interaction terms in the DGP.
+    true_gamma_interaction : dict
+        True interaction coefficients.
+    T : int
+        Length of the simulated time series.
+    seed : int
+        Random seed.
+    noise_dist : {"normal", "t"}, default="normal"
+        Innovation distribution.
+    t_df : int, default=3
+        Degrees of freedom for the Student's t innovations.
+
+    Returns
+    -------
+    dict
+        Dictionary containing the one-step-ahead RMSE of the fitted
+        extended GNAR-edge model and the simulation settings.
+    """
+
+    #generating network and simulating edge covariates
+    edge_list, _ = generate_network(
+        K=K,
+        density=density,
+        structure=structure,
+        seed=seed,
+        rdp_radius_cache=rdp_radius_cache,
+    )
+
+    E = len(edge_list)
+
+    ages, sexes = simulate_node_covariates(
+        K=K,
+        seed=seed,
+    )
+
+    edge_covariates_full = build_synthetic_edge_covariates(
+        edge_list,
+        ages,
+        sexes,
+    )
+
+    edge_covariates_sim = {
+        name: edge_covariates_full[name]
+        for name in true_gamma_edge_cov.keys()
+    }
+
+    #simulating the full model with unscaled innovations
+    X_sim, time_cov_sim, graph = (
+        simulate_full_model_misspec_unscaled(
+            edge_list,
+            K,
+            L,
+            stages_per_lag,
+            true_alpha,
+            true_beta_dict,
+            edge_covariates_sim,
+            true_gamma_edge_cov,
+            true_gamma_time_cov,
+            interaction_pairs,
+            true_gamma_interaction,
+            T=T,
+            seed=seed,
+            noise_dist=noise_dist,
+            t_df=t_df,
+        )
+    )
+
+    #defining training and test periods
+    time_index = pd.date_range(
+        "2020-01-01",
+        periods=T,
+        freq="D",
+    )
+
+    train_index = time_index[:-1]
+    test_index = time_index[-1:]
+
+    train_data = X_sim[:-1, :]
+    test_target = X_sim[-1, :]
+
+    #storing simulated exogenous series
+    exog_series_sim = {}
+
+    if (
+        true_gamma_time_cov != 0.0
+        or len(interaction_pairs) > 0
+    ):
+        exog_series_sim = {
+            "sim_temp": pd.Series(
+                time_cov_sim[:-1],
+                index=train_index,
+            )
+        }
+
+    #building graph from training data
+    sim_graph = ArrayEdgeGraph.from_edge_panel(
+        train_data,
+        edge_list,
+        n_nodes=K,
+        time_labels=train_index,
+    )
+
+    #fitting the extended GNAR-edge model
+    learner = GNAREdgeGlobalMultiCovLearner(
+        graph=sim_graph,
+        L=L,
+        stages_per_lag=stages_per_lag,
+        train_periods=train_index,
+        use_ols=True,
+        edge_covariates=edge_covariates_sim,
+        exog_series=exog_series_sim,
+        interaction_pairs=interaction_pairs,
+    )
+
+    learner.fit(
+        use_ols=True,
+        verbose=False,
+    )
+
+    #adding the held-out exogenous value for one-step-ahead prediction
+    if (
+        true_gamma_time_cov != 0.0
+        or len(interaction_pairs) > 0
+    ):
+        learner.exog_series["sim_temp"] = pd.concat([
+            exog_series_sim["sim_temp"],
+            pd.Series(
+                [time_cov_sim[-1]],
+                index=test_index,
+            ),
+        ])
+
+    #predicting the held-out final observation
+    pred = learner.predict_next(
+        periods=train_index
+    )
+
+    rmse = np.sqrt(
+        np.mean(
+            (pred - test_target) ** 2
+        )
+    )
+
+    return {
+        "df": "unscaled_t",
+        "noise_dist": noise_dist,
+        "t_df": t_df,
+        "structure": structure,
+        "seed": seed,
+        "rmse": rmse,
+    }

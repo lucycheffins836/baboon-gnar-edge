@@ -495,23 +495,58 @@ def run_baseline_comparison(graph, windows, n_rolling_test, gnar_L, gnar_stages_
     )
     return table
 
+def make_bidirectional_pairs(persistent_pair_list):
+    """
+    Given a list of canonical (alphabetically ordered) undirected pairs,
+    returns a bidirectional edge list containing BOTH directions for each
+    pair.
+
+    Parameters
+    ----------
+    persistent_pair_list : list of tuple
+        Canonically labelled undirected edge pairs, with each pair stored
+        once as ``(i, j)``.
+
+    Returns
+    -------
+    list of tuple
+        Edge list containing both ``(i, j)`` and ``(j, i)`` for every
+        persistent pair.
+    """
+    bidirectional_edges = []
+
+    for (i, j) in persistent_pair_list:
+        bidirectional_edges.append((i, j))
+        bidirectional_edges.append((j, i))
+
+    return bidirectional_edges
+
+
 def run_gnar_edge_rolling_multicov(
     timestamp="1D", L=1, stages_per_lag=None, transform="difference", growth_epsilon=1.0,
-    standardize=False, edge_threshold=1.0, n_rolling_test=5, custom_edge_pairs=None,
+    seasonal_period=7, standardize=False, edge_threshold=1.0, n_rolling_test=5, custom_edge_pairs=None,
     verbose=True, weight_mode="count", path=None,
     age_lookup=None, sex_lookup=None, edge_cov_kinds=None,
     exog_series_dict=None,
-    interaction_pairs=None, use_ols = True    #e.g. [("mean_age", "temp_max_lag1")], or [] / None for no interactions
+    interaction_pairs=None, use_ols=True, bidirectional=False
 ):
     """
-    Run rolling-origin GNAR-edge forecasting with edge-level covariates, optional exogenous series, and interaction terms.
+    Run rolling-origin GNAR-edge forecasting with edge-level covariates,
+    optional exogenous series, and interaction terms.
 
-    This function reads baboon interaction data from a tab-separated file, aggregates interactions into time windows, constructs a fixed edge panel over persistent baboon pairs, optionally transforms and standardizes the edge-weight series, and fits a multivariate GNAR-edge model using rolling one-step-ahead evaluation. It supports edge covariates, exogenous time series, and covariate-interaction terms in the learner.
+    This function reads baboon interaction data from a tab-separated file,
+    aggregates interactions into time windows, constructs a fixed edge panel
+    over persistent baboon pairs, optionally transforms and standardizes the
+    edge-weight series, and fits a multivariate GNAR-edge model using rolling
+    one-step-ahead evaluation. It supports edge covariates, exogenous time
+    series, covariate-interaction terms, and an optional bidirectional
+    representation of the persistent network.
 
     ## Parameters
 
     timestamp : str, default="1D"
-    Pandas frequency string used to floor timestamps into discrete aggregation windows.
+    Pandas frequency string used to floor timestamps into discrete aggregation
+    windows.
 
     L : int, default=1
     Number of autoregressive lags in the GNAR-edge model.
@@ -519,17 +554,26 @@ def run_gnar_edge_rolling_multicov(
     stages_per_lag : list of list of int, optional
     Neighbour stages to include at each lag. If None, defaults to [[1]] * L.
 
-    transform : {"difference", "growth_rate", "none"}, default="difference"
+    transform : {"difference", "seasonal_difference", "growth_rate", "none"}, default="difference"
     Transformation applied to the edge-weight series before fitting.
+    "seasonal_difference" computes X_t - X_{t-seasonal_period}, e.g. comparing
+    each day to the same day in the previous week when seasonal_period=7,
+    to remove weekly-cyclical patterns rather than a smooth local trend.
 
     growth_epsilon : float, default=1.0
     Small constant added to the denominator when computing growth rates.
 
+    seasonal_period : int, default=7
+    Lag used when transform="seasonal_difference" (e.g. 7 for weekly
+    differencing of daily data).
+
     standardize : bool, default=False
-    If True, standardize each edge series by its training-period standard deviation before fitting.
+    If True, standardize each edge series by its training-period standard
+    deviation before fitting.
 
     edge_threshold : float, default=1.0
-    Minimum proportion of initial training windows in which an edge must appear to be retained.
+    Minimum proportion of initial training windows in which an edge must appear
+    to be retained.
 
     n_rolling_test : int, default=5
     Number of rolling-origin validation windows.
@@ -538,70 +582,138 @@ def run_gnar_edge_rolling_multicov(
     Explicit edge list to use instead of threshold-based edge selection.
 
     verbose : bool, default=True
-    If True, print the model summary, rolling results, and final summary dictionary.
+    If True, print the model summary, rolling results, and final summary
+    dictionary.
 
     weight_mode : {"count", "proportion_all", "proportion_edges"}, default="count"
     Normalization used for raw edge weights before fitting.
 
     path : str, default="/Users/admin/Downloads/baboons_proximity_data.txt"
     Path to the tab-separated interaction data file.
+
     age_lookup : dict, optional
     Mapping from node name to age, used when building edge covariates.
+
     sex_lookup : dict, optional
     Mapping from node name to sex, used when building edge covariates.
+
     edge_cov_kinds : list, optional
-    Edge-covariate types to include, such as "abs_diff", "mean", or "same_sex".
+    Edge-covariate types to include, such as "abs_diff", "mean", or
+    "same_sex".
+
     exog_series_dict : dict, optional
     Dictionary of external time series to pass into the learner.
+
     interaction_pairs : list of tuple, optional
     Pairs of covariate names to include as interaction terms.
+
     use_ols : bool, default=True
     Whether to use OLS fitting inside the learner.
+
+    bidirectional : bool, default=False
+    If True, includes BOTH directions ``(i, j)`` and ``(j, i)`` for every
+    persistent edge, rather than only the canonically labelled direction.
+    Both directions are assigned the SAME interaction-count time series,
+    since the underlying sensor data carries no directional information.
+    This is used as a robustness check on the canonical labelling convention.
 
     ## Returns
 
     tuple
-    A 6-tuple containing:
-    (roller, summary_df, rolling_results, summary, graph, per_edge_df)
+        A 6-tuple containing:
+        ``(roller, summary_df, rolling_results, summary, graph, per_edge_df)``
 
     ## Notes
 
-    The function assumes that the helper functions/classes it calls are available in the runtime environment, including:
+    The function assumes that the helper functions/classes it calls are
+    available in the runtime environment, including:
 
     * build_edge_covariate
     * GNAREdgeGlobalMultiCovLearner
     * ArrayEdgeGraph
     * RollingEdgePredict
 
-    The code also assumes that the input data contains columns named "i", "j", and "DateTime", and that "DateTime" matches the format "%d/%m/%Y %H:%M".
+    The code also assumes that the input data contains columns named "i",
+    "j", and "DateTime", and that "DateTime" matches the format
+    "%d/%m/%Y %H:%M".
+
+    When ``bidirectional=True``, the underlying interaction counts are copied
+    to both orientations of each persistent pair. This does not create new
+    directional information; it duplicates the same undirected interaction
+    series under the two possible edge orientations.
+
+    When ``transform="seasonal_difference"``, the first ``seasonal_period``
+    windows are consumed by the transform (since ``X_t - X_{t-seasonal_period}``
+    requires ``seasonal_period`` prior observations to exist), reducing the
+    number of usable time points more than ordinary first differencing does.
     """
+
     if path is None:
         path = DATA_DIR / "baboons_proximity_data.txt"
 
     if stages_per_lag is None:
         stages_per_lag = [[1]] * L
+
     if weight_mode not in ("count", "proportion_all", "proportion_edges"):
-        raise ValueError("weight_mode must be one of 'count', 'proportion_all', 'proportion_edges'.")
+        raise ValueError(
+            "weight_mode must be one of "
+            "'count', 'proportion_all', 'proportion_edges'."
+        )
+
+    if transform not in ("difference", "seasonal_difference", "growth_rate", "none"):
+        raise ValueError(
+            "transform must be one of "
+            "'difference', 'seasonal_difference', 'growth_rate', 'none'."
+        )
+
     if edge_cov_kinds is None:
         edge_cov_kinds = []
-    if exog_series_dict is None: 
+
+    if exog_series_dict is None:
         exog_series_dict = {}
+
     if interaction_pairs is None:
         interaction_pairs = []
 
     #defining nodes and edges, and aggregating into discrete time stamps
     df = pd.read_csv(path, sep="\t")
+
     df[["node1", "node2"]] = pd.DataFrame(
-        df.apply(lambda row: sorted([row["i"], row["j"]]), axis=1).tolist(), index=df.index
+        df.apply(
+            lambda row: sorted([row["i"], row["j"]]),
+            axis=1
+        ).tolist(),
+        index=df.index
     )
-    df["DateTime"] = pd.to_datetime(df["DateTime"], format="%d/%m/%Y %H:%M")
+
+    df["DateTime"] = pd.to_datetime(
+        df["DateTime"],
+        format="%d/%m/%Y %H:%M"
+    )
+
     df["window"] = df["DateTime"].dt.floor(timestamp)
-    edges = df.groupby(["window", "node1", "node2"]).size().reset_index(name="weight")
+
+    edges = (
+        df.groupby(["window", "node1", "node2"])
+        .size()
+        .reset_index(name="weight")
+    )
+
     windows = sorted(edges["window"].unique())
     nodes = sorted(set(df["i"]).union(df["j"]))
 
     if n_rolling_test >= len(windows) - L - 1:
-        raise ValueError("n_rolling_test is too large relative to the number of available windows.")
+        raise ValueError(
+            "n_rolling_test is too large relative to the number of "
+            "available windows."
+        )
+
+    #checking there is enough data for seasonal differencing, if requested
+    if transform == "seasonal_difference" and len(windows) <= seasonal_period:
+        raise ValueError(
+            f"Not enough windows ({len(windows)}) for "
+            f"seasonal_period={seasonal_period}."
+        )
 
     if custom_edge_pairs is not None:
         persistent_pair_list = sorted(custom_edge_pairs)
@@ -609,78 +721,189 @@ def run_gnar_edge_rolling_multicov(
         #defiining edge set according to persistence criterion
         #persistence criterion applied to training windows for first rolling step
         initial_train_windows = windows[:-n_rolling_test]
-        edges_initial = edges[edges["window"].isin(initial_train_windows)].copy()
-        edges_count_initial = edges_initial.groupby(["node1", "node2"]).size().reset_index(name="n_windows")
-        min_windows_required = int(np.ceil(edge_threshold * len(initial_train_windows)))
-        persistent_edges = edges_count_initial[edges_count_initial["n_windows"] >= min_windows_required].copy()
-        persistent_pair_list = list(persistent_edges[["node1", "node2"]].itertuples(index=False, name=None))
+
+        edges_initial = edges[
+            edges["window"].isin(initial_train_windows)
+        ].copy()
+
+        edges_count_initial = (
+            edges_initial
+            .groupby(["node1", "node2"])
+            .size()
+            .reset_index(name="n_windows")
+        )
+
+        min_windows_required = int(
+            np.ceil(edge_threshold * len(initial_train_windows))
+        )
+
+        persistent_edges = edges_count_initial[
+            edges_count_initial["n_windows"] >= min_windows_required
+        ].copy()
+
+        persistent_pair_list = list(
+            persistent_edges[
+                ["node1", "node2"]
+            ].itertuples(index=False, name=None)
+        )
+
+    #expand to both directions, if requested
+    if bidirectional:
+        persistent_pair_list = make_bidirectional_pairs(
+            persistent_pair_list
+        )
 
     #raw interaction count lookup
-    weight_lookup = {(r["window"], r["node1"], r["node2"]): r["weight"] for _, r in edges.iterrows()}
+    weight_lookup = {
+        (r["window"], r["node1"], r["node2"]): r["weight"]
+        for _, r in edges.iterrows()
+    }
 
     #node and edge lookups
-    node_to_idx = {name: i for i, name in enumerate(nodes)}
-    idx_to_node = {i: name for name, i in node_to_idx.items()}
+    node_to_idx = {
+        name: i
+        for i, name in enumerate(nodes)
+    }
+
+    idx_to_node = {
+        i: name
+        for name, i in node_to_idx.items()
+    }
+
     K = len(nodes)
-    edge_idx_list = [(node_to_idx[a], node_to_idx[b]) for a, b in persistent_pair_list]
-    edge_names = [f"{idx_to_node[a]}-{idx_to_node[b]}" for a, b in edge_idx_list]
+
+    edge_idx_list = [
+        (node_to_idx[a], node_to_idx[b])
+        for a, b in persistent_pair_list
+    ]
+
+    edge_names = [
+        f"{idx_to_node[a]}-{idx_to_node[b]}"
+        for a, b in edge_idx_list
+    ]
+
     E = len(edge_idx_list)
 
     #building edge covariates
     edge_covariates = {}
+
     for kind in edge_cov_kinds:
-        cov_name = {"abs_diff": "age_diff", "mean": "mean_age", "same_sex": "same_sex"}.get(kind, kind)
+        cov_name = {
+            "abs_diff": "age_diff",
+            "mean": "mean_age",
+            "same_sex": "same_sex"
+        }.get(kind, kind)
+
         edge_covariates[cov_name] = build_edge_covariate(
-            edge_names, age_lookup=age_lookup, sex_lookup=sex_lookup, kind=kind
+            edge_names,
+            age_lookup=age_lookup,
+            sex_lookup=sex_lookup,
+            kind=kind
         )
 
     #building raw interaction count edge panel
-    X_level_raw = np.zeros((len(windows), E), dtype=float)
+    X_level_raw = np.zeros(
+        (len(windows), E),
+        dtype=float
+    )
+
+    #symmetric lookup so both (i,j) and (j,i) retrieve the same
+    #underlying interaction count
+    def get_weight(window, a, b):
+        key1 = (window, a, b)
+        key2 = (window, b, a)
+
+        return weight_lookup.get(
+            key1,
+            weight_lookup.get(key2, 0.0)
+        )
+
     for t, w in enumerate(windows):
         for e, (a, b) in enumerate(persistent_pair_list):
-            X_level_raw[t, e] = weight_lookup.get((w, a, b), 0.0)
+            X_level_raw[t, e] = get_weight(w, a, b)
 
-    daily_total_all = edges.groupby("window")["weight"].sum().reindex(windows, fill_value=0.0)
+    daily_total_all = (
+        edges.groupby("window")["weight"]
+        .sum()
+        .reindex(windows, fill_value=0.0)
+    )
 
     #normalising weights
     if weight_mode == "count":
         X_level = X_level_raw.copy()
+
     elif weight_mode == "proportion_all":
         denom = daily_total_all.to_numpy(dtype=float)
+
         if np.any(denom == 0.0):
-            raise ValueError("At least one window has zero total interactions across all pairs.")
-        X_level = X_level_raw / denom[:, None]
-    elif weight_mode == "proportion_edges":
-        denom = X_level_raw.sum(axis=1)
-        if np.any(denom == 0.0):
-            raise ValueError("At least one window has zero total interactions among persistent pairs.")
+            raise ValueError(
+                "At least one window has zero total interactions "
+                "across all pairs."
+            )
+
         X_level = X_level_raw / denom[:, None]
 
-    #applying difference / growth rate transform if requested
+    elif weight_mode == "proportion_edges":
+        denom = X_level_raw.sum(axis=1)
+
+        if np.any(denom == 0.0):
+            raise ValueError(
+                "At least one window has zero total interactions "
+                "among persistent pairs."
+            )
+
+        X_level = X_level_raw / denom[:, None]
+
+    #applying difference / seasonal difference / growth rate transform if requested
     if transform == "difference":
-        X_model = np.diff(X_level, axis=0)
+        X_model = np.diff(
+            X_level,
+            axis=0
+        )
         model_windows = windows[1:]
+
+    elif transform == "seasonal_difference":
+        #comparing each period to the corresponding period seasonal_period steps earlier
+        #(e.g. each day to the same day in the previous week, when seasonal_period=7)
+        X_model = X_level[seasonal_period:, :] - X_level[:-seasonal_period, :]
+        model_windows = windows[seasonal_period:]
+
     elif transform == "growth_rate":
         numerator = X_level[1:] - X_level[:-1]
         denominator = X_level[:-1] + growth_epsilon
+
         X_model = numerator / denominator
         model_windows = windows[1:]
+
     else:
         X_model = X_level
         model_windows = windows
 
     n_train_for_std = len(model_windows) - n_rolling_test
-    edge_std = X_model[:n_train_for_std, :].std(axis=0)
+
+    edge_std = X_model[
+        :n_train_for_std,
+        :
+    ].std(axis=0)
+
     edge_std[edge_std == 0] = 1.0
+
     #standardising, if requested
     if standardize:
         X_model_fit = X_model / edge_std
     else:
         X_model_fit = X_model
-        edge_std = np.ones(E, dtype=float)
+        edge_std = np.ones(
+            E,
+            dtype=float
+        )
 
     graph = ArrayEdgeGraph.from_edge_panel(
-        X_model_fit, edge_idx_list, n_nodes=K, time_labels=model_windows, node_labels=nodes
+        X_model_fit,
+        edge_idx_list,
+        n_nodes=K,
+        time_labels=model_windows,
+        node_labels=nodes
     )
 
     train_periods = model_windows[:-n_rolling_test]
@@ -693,8 +916,10 @@ def run_gnar_edge_rolling_multicov(
         train_periods=train_periods,
         val_periods=val_periods,
         learner_kwargs=dict(
-            L=L, stages_per_lag=stages_per_lag, 
-            edge_covariates=edge_covariates, exog_series=exog_series_dict,
+            L=L,
+            stages_per_lag=stages_per_lag,
+            edge_covariates=edge_covariates,
+            exog_series=exog_series_dict,
             interaction_pairs=interaction_pairs
         ),
         fit_kwargs=dict(use_ols=use_ols),
@@ -705,87 +930,193 @@ def run_gnar_edge_rolling_multicov(
 
     rolling_rows = []
     per_edge_errors = []
-    window_to_idx = {w: i for i, w in enumerate(windows)}
+
+    window_to_idx = {
+        w: i
+        for i, w in enumerate(windows)
+    }
 
     #converting each step's predicted values back to raw count form
     for s in roller.steps:
         target_period = s.target_period
         pred_value_fit = s.pred_value
         true_value_fit = s.true_value
+
         if true_value_fit is None:
             continue
 
         pred_value = pred_value_fit * edge_std
+
         test_pos_level = window_to_idx[target_period]
 
-        #adding differenced/growth predictions to previous level
+        #adding differenced/seasonal/growth predictions to previous level
         if transform == "difference":
-            last_level = X_level[test_pos_level - 1, :]
-            y_pred_level = last_level + pred_value
+            last_level = X_level[
+                test_pos_level - 1,
+                :
+            ]
+
+            y_pred_level = (
+                last_level
+                + pred_value
+            )
+
+        elif transform == "seasonal_difference":
+            #comparing back to the level seasonal_period periods before the target
+            last_level_seasonal = X_level[
+                test_pos_level - seasonal_period,
+                :
+            ]
+
+            y_pred_level = (
+                last_level_seasonal
+                + pred_value
+            )
+
         elif transform == "growth_rate":
-            last_level = X_level[test_pos_level - 1, :]
-            y_pred_level = pred_value * (last_level + growth_epsilon) + last_level
+            last_level = X_level[
+                test_pos_level - 1,
+                :
+            ]
+
+            y_pred_level = (
+                pred_value
+                * (last_level + growth_epsilon)
+                + last_level
+            )
+
         else:
             y_pred_level = pred_value
 
         #scaling by the day's aggregate interaction count, if data was normalised
         if weight_mode == "count":
             y_pred_eval = y_pred_level
-            y_true_eval = X_level_raw[test_pos_level, :]
-        elif weight_mode == "proportion_all":
-            total_all = float(daily_total_all.iloc[test_pos_level])
-            y_pred_eval = y_pred_level * total_all
-            y_true_eval = X_level_raw[test_pos_level, :]
-        elif weight_mode == "proportion_edges":
-            total_edges = float(X_level_raw[test_pos_level, :].sum())
-            y_pred_eval = y_pred_level * total_edges
-            y_true_eval = X_level_raw[test_pos_level, :]
+            y_true_eval = X_level_raw[
+                test_pos_level,
+                :
+            ]
 
-        abs_error = np.abs(y_true_eval - y_pred_eval)
+        elif weight_mode == "proportion_all":
+            total_all = float(
+                daily_total_all.iloc[test_pos_level]
+            )
+
+            y_pred_eval = y_pred_level * total_all
+
+            y_true_eval = X_level_raw[
+                test_pos_level,
+                :
+            ]
+
+        elif weight_mode == "proportion_edges":
+            total_edges = float(
+                X_level_raw[
+                    test_pos_level,
+                    :
+                ].sum()
+            )
+
+            y_pred_eval = y_pred_level * total_edges
+
+            y_true_eval = X_level_raw[
+                test_pos_level,
+                :
+            ]
+
+        abs_error = np.abs(
+            y_true_eval - y_pred_eval
+        )
+
         per_edge_errors.append(abs_error)
 
         #summary for each rolling step
         rolling_rows.append({
-    "step": s.step,
-    "target_period": target_period,
-    "MAE": abs_error.mean(),
-    "RMSE": np.sqrt((abs_error ** 2).mean()),
-    "y_pred_eval": y_pred_eval.copy(),    #ADD: full per-edge array
-    "y_true_eval": y_true_eval.copy(),    #ADD: full per-edge array
-    "n_train_samples": s.n_train_samples,
-    "AIC": None if s.aic_bic is None else s.aic_bic.get("AIC"),
-    "BIC": None if s.aic_bic is None else s.aic_bic.get("BIC"),
-})
+            "step": s.step,
+            "target_period": target_period,
+            "MAE": abs_error.mean(),
+            "RMSE": np.sqrt((abs_error ** 2).mean()),
+            "y_pred_eval": y_pred_eval.copy(),    #ADD: full per-edge array
+            "y_true_eval": y_true_eval.copy(),    #ADD: full per-edge array
+            "n_train_samples": s.n_train_samples,
+            "AIC": None if s.aic_bic is None else s.aic_bic.get("AIC"),
+            "BIC": None if s.aic_bic is None else s.aic_bic.get("BIC"),
+        })
 
-    rolling_results = pd.DataFrame(rolling_rows)
+    rolling_results = pd.DataFrame(
+        rolling_rows
+    )
+
     #computing errors for each edge
-    per_edge_errors = np.array(per_edge_errors)
+    per_edge_errors = np.array(
+        per_edge_errors
+    )
+
     per_edge_df = pd.DataFrame({
         "edge": edge_names,
         "edge_mae": per_edge_errors.mean(axis=0),
-        "edge_rmse": np.sqrt((per_edge_errors ** 2).mean(axis=0)),
+        "edge_rmse": np.sqrt(
+            (per_edge_errors ** 2).mean(axis=0)
+        ),
         "training_std": edge_std
-    }).sort_values("edge_mae", ascending=False).reset_index(drop=True)
+    }).sort_values(
+        "edge_mae",
+        ascending=False
+    ).reset_index(drop=True)
 
-    last_gammas = roller.steps[-1].learner.gamma_ if roller.steps[-1].learner is not None else None
+    last_gammas = (
+        roller.steps[-1].learner.gamma_
+        if roller.steps[-1].learner is not None
+        else None
+    )
 
-    all_covs = edge_cov_kinds + list(exog_series_dict.keys()) + [f"{e}_X_{t}" for e, t in interaction_pairs]
+    all_covs = (
+        edge_cov_kinds
+        + list(exog_series_dict.keys())
+        + [
+            f"{e}_X_{t}"
+            for e, t in interaction_pairs
+        ]
+    )
 
     #summary over the rolling steps
     summary = {
-        "model": f"GNAR-edge (multicov: {all_covs}, L={L})",
-        "timestamp": timestamp, "L": L, "transform": transform, "standardize": standardize,
-        "weight_mode": weight_mode, "n_edges": E, "n_rolling_test": n_rolling_test,
-        "n_covariates": len(edge_cov_kinds) + len(exog_series_dict) + len(interaction_pairs),
-        "mean_MAE": rolling_results["MAE"].mean(), "mean_RMSE": rolling_results["RMSE"].mean(),
-        "std_MAE": rolling_results["MAE"].std(), "std_RMSE": rolling_results["RMSE"].std(),
+        "model": (
+            f"GNAR-edge (multicov: {all_covs}, "
+            f"L={L}, transform={transform}, bidirectional={bidirectional})"
+        ),
+        "timestamp": timestamp,
+        "L": L,
+        "transform": transform,
+        "seasonal_period": seasonal_period if transform == "seasonal_difference" else None,
+        "standardize": standardize,
+        "weight_mode": weight_mode,
+        "n_edges": E,
+        "n_rolling_test": n_rolling_test,
+        "n_covariates": (
+            len(edge_cov_kinds)
+            + len(exog_series_dict)
+            + len(interaction_pairs)
+        ),
+        "mean_MAE": rolling_results["MAE"].mean(),
+        "mean_RMSE": rolling_results["RMSE"].mean(),
+        "std_MAE": rolling_results["MAE"].std(),
+        "std_RMSE": rolling_results["RMSE"].std(),
         "fitted_gammas_last_step": last_gammas,
     }
 
     if verbose:
-        print(summary_df); print(rolling_results); print(summary)
+        print(summary_df)
+        print(rolling_results)
+        print(summary)
 
-    return roller, summary_df, rolling_results, summary, graph, per_edge_df
+    return (
+        roller,
+        summary_df,
+        rolling_results,
+        summary,
+        graph,
+        per_edge_df,
+    )
 
 def build_stages_per_lag(L, r):
     """

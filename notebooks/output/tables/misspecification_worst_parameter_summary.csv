@@ -1,0 +1,5 @@
+Misspecification,Regime,Most affected parameter,RMSE
+Network rewiring,With interaction,Temp,0.1799
+Network rewiring,No interaction,Age Diff,0.0089
+Exogenous-innovation correlation,With interaction,Mean Age,0.1459
+Exogenous-innovation correlation,No interaction,Temp,0.1142
