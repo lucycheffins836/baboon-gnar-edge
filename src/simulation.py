@@ -3850,3 +3850,163 @@ def run_heavy_tail_prediction_replication_unscaled(
         "seed": seed,
         "rmse": rmse,
     }
+
+def build_true_psi_list(
+    edge_list,
+    K,
+    L,
+    stages_per_lag,
+    true_alpha,
+    true_beta_dict,
+):
+    """
+    Construct the true lag coefficient matrices from the data-generating
+    process.
+
+    For each lag ``l``, this function constructs the GNAR-edge coefficient
+    matrix
+
+        Psi_l = alpha_l I + sum_r beta_{l,r} W_r,
+
+    where ``I`` is the identity matrix and ``W_r`` is the network weight
+    matrix corresponding to neighbourhood stage ``r``. The construction
+    mirrors the autoregressive and neighbour-effect components used in
+    ``simulate_full_model``.
+
+    Parameters
+    ----------
+    edge_list : list of tuple
+        Edge list defining the network topology.
+    K : int
+        Number of nodes in the network.
+    L : int
+        Number of autoregressive lags.
+    stages_per_lag : list of list of int
+        Neighbour stages included at each lag. The entry at index ``l - 1``
+        contains the stages included for lag ``l``.
+    true_alpha : array-like
+        True autoregressive coefficients, with one coefficient for each lag.
+    true_beta_dict : dict
+        Dictionary mapping ``(lag, stage)`` pairs to the corresponding true
+        neighbour-effect coefficients.
+
+    Returns
+    -------
+    list of numpy.ndarray
+        List containing the ``E x E`` true coefficient matrix ``Psi_l`` for
+        each lag, where ``E`` is the number of edges in the network.
+    """
+    E = len(edge_list)
+
+    needed_r = sorted({
+        r
+        for rs in stages_per_lag
+        for r in rs
+    })
+
+    W_dict, _ = build_W_matrices(
+        edge_list,
+        K,
+        needed_r,
+    )
+
+    Psi_list = []
+
+    for l in range(1, L + 1):
+        Psi_l = true_alpha[l - 1] * np.eye(E)
+
+        for r in stages_per_lag[l - 1]:
+            Psi_l = (
+                Psi_l
+                + true_beta_dict[(l, r)] * W_dict[r]
+            )
+
+        Psi_list.append(Psi_l)
+
+    return Psi_list
+
+
+def check_true_stationarity(
+    edge_list,
+    K,
+    L,
+    stages_per_lag,
+    true_alpha,
+    true_beta_dict,
+):
+    """
+    Check the stationarity of the true GNAR-edge data-generating process
+    using the companion-matrix eigenvalue condition.
+
+    The true lag coefficient matrices are first constructed using
+    ``build_true_psi_list``. These matrices are then arranged into the
+    companion matrix corresponding to the VAR representation of the
+    GNAR-edge process. The process satisfies the eigenvalue-based
+    stationarity condition when every eigenvalue of the companion matrix
+    lies strictly inside the unit circle.
+
+    Parameters
+    ----------
+    edge_list : list of tuple
+        Edge list defining the network topology.
+    K : int
+        Number of nodes in the network.
+    L : int
+        Number of autoregressive lags.
+    stages_per_lag : list of list of int
+        Neighbour stages included at each lag.
+    true_alpha : array-like
+        True autoregressive coefficients used in the data-generating process.
+    true_beta_dict : dict
+        Dictionary mapping ``(lag, stage)`` pairs to the corresponding true
+        neighbour-effect coefficients.
+
+    Returns
+    -------
+    max_modulus : float
+        Maximum modulus among the eigenvalues of the companion matrix.
+    is_stationary : bool
+        ``True`` if the maximum eigenvalue modulus is strictly less than one,
+        and ``False`` otherwise.
+
+    Notes
+    -----
+    This function checks stationarity using the true data-generating
+    coefficients rather than coefficients estimated from a simulated sample.
+    The exogenous covariate coefficients do not enter the companion matrix,
+    since the stationarity condition concerns the autoregressive dynamics of
+    the endogenous edge-weight process.
+    """
+    Psi_list = build_true_psi_list(
+        edge_list,
+        K,
+        L,
+        stages_per_lag,
+        true_alpha,
+        true_beta_dict,
+    )
+
+    E = Psi_list[0].shape[0]
+
+    top_row = np.hstack(Psi_list)
+
+    if L > 1:
+        identity_block = np.eye(E * (L - 1))
+
+        bottom = np.hstack([
+            identity_block,
+            np.zeros((E * (L - 1), E)),
+        ])
+
+        companion = np.vstack([
+            top_row,
+            bottom,
+        ])
+
+    else:
+        companion = top_row
+
+    eigenvalues = np.linalg.eigvals(companion)
+    max_modulus = np.max(np.abs(eigenvalues))
+
+    return max_modulus, max_modulus < 1
