@@ -1,4 +1,4 @@
-# Predicting Interactions within a Primate Social Network: An Extension of the GNAR-edge Modeln
+# Predicting Interactions within a Primate Social Network: An Extension of the GNAR-edge Model
 ```text
 The code in this repository accompanies my dissertation, "Predicting Interactions within a Primate Social Network: An Extension of the GNAR-edge Model". In this dissertation, I extend the GNAR-edge model, introduced by Mantziou et al. (2023) to allow for inclusion of exogenous covariates. The extension is motivated by a data set that features a multivariate time series of pairwise interaction counts within a group of baboons. This data set was originally collected and analysed by Gelardi et al. (2020).
 ```
