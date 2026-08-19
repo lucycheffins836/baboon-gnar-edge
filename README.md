@@ -105,4 +105,4 @@ The original GNAR-edge implementation by Mantziou et al. (2023) was developed fo
 ## Citation
 
 If referencing this work, please cite:
-Lucy Cheffins. [2026]. "Predicting Interactions within a Primate Social Network: An Extension of the GNAR-edge Model". [University of Oxford].
+Lucy Cheffins. (2026). "Predicting Interactions within a Primate Social Network: An Extension of the GNAR-edge Model". University of Oxford.
