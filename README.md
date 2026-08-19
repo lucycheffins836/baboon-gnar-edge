@@ -1,6 +1,6 @@
 # Extended GNAR-edge Model: A Primate Social Network Application
 ```text
-The code in this repository accompanies my dissertation, "[INSERT TITLE]". In this dissertation, I extend the GNAR-edge model, introduced by Mantziou et al. (2023) to allow for inclusion of exogenous covariates. The extension is motivated by a data set that features a multivariate time series of pairwise interaction counts within a group of baboons. This data set was originally collected and analysed by Gelardi et al. (2020).
+The code in this repository accompanies my dissertation, "Predicting Interactions within a Primate Social Network: An Extension of the GNAR-edge Model". In this dissertation, I extend the GNAR-edge model, introduced by Mantziou et al. (2023) to allow for inclusion of exogenous covariates. The extension is motivated by a data set that features a multivariate time series of pairwise interaction counts within a group of baboons. This data set was originally collected and analysed by Gelardi et al. (2020).
 ```
 
 ## Repository Structure
@@ -105,4 +105,4 @@ The original GNAR-edge implementation by Mantziou et al. (2023) was developed fo
 ## Citation
 
 If referencing this work, please cite:
-Lucy Cheffins. [2026]. "[Thesis Title]". [University of Oxford].
+Lucy Cheffins. [2026]. "Predicting Interactions within a Primate Social Network: An Extension of the GNAR-edge Model". [University of Oxford].
